@@ -1,0 +1,69 @@
+#!/bin/bash
+# Kiro preToolUse hook for execute_bash. Reads the tool input JSON on stdin.
+# Exit 2 blocks the command and shows the reason to the agent.
+# Hooks cannot rewrite a command, so each token rule names the compact form.
+cmd=$(python3 -c 'import json,sys
+d=json.load(sys.stdin)
+for k in ("tool_input","input","args"):
+    v=d.get(k)
+    if isinstance(v,dict) and v.get("command"): print(v["command"]); break
+else:
+    print(d.get("command",""))' 2>/dev/null)
+[ -z "$cmd" ] && exit 0
+root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+state="${TMPDIR:-/tmp}/lean-rails-agent/$(printf %s "$root" | tr / _)"
+tools="~/.kiro/lean-rails/bin"
+block() { echo "blocked by guard-bash: $1" >&2; exit 2; }
+has() { echo "$cmd" | grep -qE "$1"; }
+start='(^|[;&|(] *)'  # command position: start of line or after an operator
+
+# Safety
+has "${start}(sudo )?(/bin/)?rm +(-[a-zA-Z]*[rf][a-zA-Z]* |.*\*)" && block "recursive or forced rm; use trash or rm on one named file"
+has 'find .*(-delete|-exec +rm)|\| *(xargs +)?rm\b|\bshred\b'       && block "find -delete / piped rm / shred"
+has '\bgit +push\b'                                                 && block "git push is manual"
+has '\bgit +(reset +--hard|clean +-[a-zA-Z]*f|checkout +-- +\.|branch +-D)' && block "destructive git; ask first"
+has 'db:(drop|reset|schema:load)'                                   && block "destructive db task; ask first"
+has '\-\-no-verify'                                                 && block "never bypass hooks"
+
+# Token budget. Prefix RAW=1 to bypass when full output is truly needed.
+has '(^| )RAW=1 ' && exit 0
+
+has "^ *cd +($root|\.|~[^/]*/[^/]+)/? *(&&|;)"                      && block "shell is already in repo root; drop the cd prefix"
+has "${start}([A-Z_]+=[^ ]+ +)*(bundle +exec +|bin/)?(rspec\b|rails +test\b)" && block "use $tools/test [spec/x_spec.rb:LINE]"
+has "${start}(bundle +exec +|bin/)?rubocop\b"                       && block "use $tools/lint [-a] [files]"
+has '\brails +routes\b' && ! has 'routes.* (-g|--grep|-c|--controller)\b' && block "use rails routes -g <pattern>"
+has '\bgit +log\b' && ! has 'log.* (-n *[0-9]|-[0-9]+|--max-count)'  && block "use git log --oneline -n 10"
+has '\bgit +(diff|show)\b' && ! has ' (--stat|--shortstat|--name-only|--name-status|-U[0-9]|--) ?' \
+                                                                    && block "use --stat first, then git diff -U1 -- <path>"
+has '\bgit +status\b' && ! has 'status +(-[a-zA-Z]*s|--short|--porcelain)' && block "use git status -sb"
+has "${start}grep +(-[a-zA-Z]*[rR]|--recursive)"                    && block "use rg -n <pattern> [path] (honours .gitignore and .ignore)"
+has "${start}(tree\b|ls +-[a-zA-Z]*R)"                              && block "use rg --files | rg <pattern>"
+has "${start}find\b" && ! has 'find .*-(i?name|i?path|regex)\b'     && block "use rg --files | rg <pattern>"
+has "${start}(cat|less|more) +[^|;&]*\.log\b"                       && block "use tail -n 50 <log>"
+has "${start}bundle( +install)? *($|[;&|])"                         && block "use bundle install --quiet"
+
+# cat on any file over 200 lines, anywhere in the command
+big=$(CMD="$cmd" ROOT="$root" python3 -c '
+import os, shlex
+lex = shlex.shlex(os.environ["CMD"], posix=True, punctuation_chars=True)
+lex.whitespace_split = True
+try: toks = list(lex)
+except ValueError: toks = []
+in_cat = False
+for t in toks:
+    if t and set(t) <= set(";&|<>()"): in_cat = False; continue
+    if t == "cat": in_cat = True; continue
+    if in_cat and not t.startswith("-"):
+        p = t if t.startswith("/") else os.path.join(os.environ["ROOT"], t)
+        if os.path.isfile(p):
+            n = sum(1 for _ in open(p, "rb"))
+            if n > 200: print(os.path.basename(p), n); break
+' 2>/dev/null)
+[ -n "$big" ] && block "${big% *} is ${big#* } lines; rg -n for what you need, then sed -n 'A,Bp'"
+
+# Only one full suite run per session; hooks/context clears the marker at spawn
+if has "lean-rails/bin/test *($|[;&|]|2>)"; then
+  [ -f "$state.full_suite_ran" ] && block "full suite already ran this session; rerun only failed files (RAW=1 to force)"
+  mkdir -p "$(dirname "$state")" && touch "$state.full_suite_ran"
+fi
+exit 0
