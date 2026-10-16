@@ -20,7 +20,6 @@ ln -sfn "$repo" "$link"
 # Resource URIs are not run through a shell, so expand ~ here rather than trust Kiro to
 sed "s#~/\.kiro#$kiro#g" "$repo/agent.json" > "$config"
 
-[ -f "$kiro/skills/37signals-style/SKILL.md" ] || echo "note: $kiro/skills/37signals-style missing; style falls back to rules.md"
 command -v rg >/dev/null || echo "note: install ripgrep (brew install ripgrep); the guards point the agent at rg"
 kiro-cli agent validate --path "$config"
 echo "installed: kiro-cli chat --agent rails  (or: kiro-cli agent set-default rails)"

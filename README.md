@@ -30,8 +30,11 @@ everything else is live through the link.
   on every request, so unused ones cost tokens each turn
 - **`rules.md`**, sent every turn: terse-output rules, the compact commands, and the coding style
   (vanilla Rails, 37signals, no service objects, deep modules). The project's own `AGENTS.md` is
-  loaded too if it has one. The `37signals-style` skill in `~/.kiro/skills` is attached as a
-  skill, so its full text loads only when needed
+  loaded too if it has one
+- **`style.md`**: the fuller style rules (naming, model shape, controllers, migrations, Ruby
+  layout, tests), attached as a skill. Only its name and description load at startup; the
+  agent reads the rest when designing a new model, controller, job or migration. Measured:
+  +0.007% context at startup as a skill, against +0.077% if always loaded
 - **`hooks/context`** (spawn): prints branch, Ruby version, test framework, recent commits,
   pending migrations and open ports so the agent skips discovery turns
 - **`hooks/guard-bash`**: blocks dangerous commands (destructive git, db:drop, rm -rf, git push)
@@ -67,6 +70,7 @@ The agent calls these by their full path, `~/.kiro/lean-rails/bin/...`:
 ```
 agent.json        agent config template (~ expanded by bin/install)
 rules.md          always-on rules and coding style
+style.md          fuller style rules, loaded on demand
 bin/install       installs the agent globally
 bin/test          compact test runner
 bin/lint          compact rubocop

@@ -39,8 +39,7 @@ A guard blocks verbose forms and names the compact one. `RAW=1 cmd` bypasses whe
 - Deep modules: split when the piece has a name, never for line count. No pass-through layers.
 - Comments only for why, constraints, measured numbers, cross-system coupling.
 - Migrations are DDL only; data changes are rake tasks run by hand. Never `db:seed` outside dev.
-- Need more? The 37signals-style skill has the full rules; read it only for a new model,
-  controller, job or migration design.
+- Designing a new model, controller, job or migration? Read the rails-style skill first.
 
 ## Git & safety
 - Lint passes before commit. Subject: plain imperative ("Add user avatar upload").
