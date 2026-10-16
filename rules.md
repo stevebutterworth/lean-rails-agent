@@ -6,6 +6,7 @@ The repo's own AGENTS.md, if present, wins where it differs.
 ## Output
 - No preamble, no restating the task, no closing summary.
 - Answers: 3 lines max unless asked. After code changes: one line per file touched.
+- Short sentences, active voice, one idea each. Same word for the same thing.
 - Edit with str_replace; never rewrite a whole file. Never re-read a file to check an edit.
 - Blocked on a choice? Pick the obvious option, say so in one line. Ask only if truly stuck.
 - Prose (docs, commits, UI copy): never use em-dashes.
