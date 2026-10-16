@@ -1,6 +1,7 @@
 #!/bin/bash
 # Kiro preToolUse hook for execute_bash. Reads the tool input JSON on stdin.
 # Exit 2 blocks the command and shows the reason to the agent.
+# Hooks cannot rewrite a command, so each token rule names the compact form.
 cmd=$(python3 -c 'import json,sys
 d=json.load(sys.stdin)
 for k in ("tool_input","input","args"):
@@ -11,35 +12,56 @@ else:
 [ -z "$cmd" ] && exit 0
 root=$(cd "$(dirname "$0")/.." && pwd)
 block() { echo "blocked by bin/kiro-guard: $1" >&2; exit 2; }
+has() { echo "$cmd" | grep -qE "$1"; }
+start='(^|[;&|(] *)'  # command position: start of line or after an operator
 
 # Safety
-echo "$cmd" | grep -qE '(^|[;&| ])(sudo )?(/bin/)?rm +(-[a-zA-Z]*[rf][a-zA-Z]* |.*\*)' && block "recursive or forced rm; use trash or rm on one named file"
-echo "$cmd" | grep -qE 'find .*(-delete|-exec +rm)|\| *(xargs +)?rm\b|\bshred\b'         && block "find -delete / piped rm / shred"
-echo "$cmd" | grep -qE '\bgit +push\b'                                                     && block "git push is manual"
-echo "$cmd" | grep -qE '\bgit +(reset +--hard|clean +-[a-zA-Z]*f|checkout +-- +\.|branch +-D)' && block "destructive git; ask first"
-echo "$cmd" | grep -qE 'db:(drop|reset|schema:load)'                                       && block "destructive db task; ask first"
-echo "$cmd" | grep -qE '\-\-no-verify'                                                     && block "never bypass hooks"
+has "${start}(sudo )?(/bin/)?rm +(-[a-zA-Z]*[rf][a-zA-Z]* |.*\*)" && block "recursive or forced rm; use trash or rm on one named file"
+has 'find .*(-delete|-exec +rm)|\| *(xargs +)?rm\b|\bshred\b'       && block "find -delete / piped rm / shred"
+has '\bgit +push\b'                                                 && block "git push is manual"
+has '\bgit +(reset +--hard|clean +-[a-zA-Z]*f|checkout +-- +\.|branch +-D)' && block "destructive git; ask first"
+has 'db:(drop|reset|schema:load)'                                   && block "destructive db task; ask first"
+has '\-\-no-verify'                                                 && block "never bypass hooks"
 
-# Token budget: block redundant cd prefix
-echo "$cmd" | grep -qE "^ *cd +($root|\.|~[^/]*/[^/]+)/? *(&&|;)" && block "shell is already in repo root; drop the cd prefix"
+# Token budget. Prefix RAW=1 to bypass when full output is truly needed.
+has '(^| )RAW=1 ' && exit 0
 
-# Token budget: block cat on large files
-if echo "$cmd" | grep -qE '(^|[;&| ])cat +[^|<>;&]+$'; then
-  f=$(echo "$cmd" | sed -E 's/.*(^|[;&| ])cat +//' | awk '{print $1}')
-  [ "${f:0:1}" != "/" ] && f="$root/$f"
-  if [ -f "$f" ] && [ "$(wc -l < "$f")" -gt 200 ]; then
-    block "$(basename "$f") is $(wc -l < "$f" | tr -d ' ') lines; grep for what you need, then read a range with sed -n 'A,Bp'"
-  fi
-fi
+has "^ *cd +($root|\.|~[^/]*/[^/]+)/? *(&&|;)"                      && block "shell is already in repo root; drop the cd prefix"
+has "${start}([A-Z_]+=[^ ]+ +)*(bundle +exec +|bin/)?rspec\b"       && block "use bin/t [spec/file_spec.rb:LINE]"
+has "${start}(bundle +exec +|bin/)?rubocop\b"                       && block "use bin/lint [-a] [files]"
+has '\brails +routes\b' && ! has 'routes.* (-g|--grep|-c|--controller)\b' && block "use rails routes -g <pattern>"
+has '\bgit +log\b' && ! has 'log.* (-n *[0-9]|-[0-9]+|--max-count)'  && block "use git log --oneline -n 10"
+has '\bgit +(diff|show)\b' && ! has ' (--stat|--shortstat|--name-only|--name-status|-U[0-9]|--) ?' \
+                                                                    && block "use --stat first, then git diff -U1 -- <path>"
+has '\bgit +status\b' && ! has 'status +(-[a-zA-Z]*s|--short|--porcelain)' && block "use git status -sb"
+has "${start}grep +(-[a-zA-Z]*[rR]|--recursive)"                    && block "use rg -n <pattern> [path] (honours .gitignore and .ignore)"
+has "${start}(tree\b|ls +-[a-zA-Z]*R)"                              && block "use rg --files | rg <pattern>"
+has "${start}find\b" && ! has 'find .*-(i?name|i?path|regex)\b'     && block "use rg --files | rg <pattern>"
+has "${start}(cat|less|more) +[^|;&]*\.log\b"                       && block "use tail -n 50 <log>"
+has "${start}bundle( +install)? *($|[;&|])"                         && block "use bundle install --quiet"
 
-# Token budget: only one full suite run per session
-# Adjust the pattern below if you use minitest or a custom runner
-if echo "$cmd" | grep -qE 'bundle exec rspec *$|bundle exec rspec *(2>|\||;|&)'; then
-  if echo "$cmd" | grep -q 'FORCE=1'; then :
-  elif [ -f "$root/tmp/.full_suite_ran" ]; then
-    block "full suite already ran this session; rerun only failed files. Prefix FORCE=1 if a second run is truly needed"
-  else
-    touch "$root/tmp/.full_suite_ran"
-  fi
+# cat on any file over 200 lines, anywhere in the command
+big=$(CMD="$cmd" ROOT="$root" python3 -c '
+import os, shlex
+lex = shlex.shlex(os.environ["CMD"], posix=True, punctuation_chars=True)
+lex.whitespace_split = True
+try: toks = list(lex)
+except ValueError: toks = []
+in_cat = False
+for t in toks:
+    if t and set(t) <= set(";&|<>()"): in_cat = False; continue
+    if t == "cat": in_cat = True; continue
+    if in_cat and not t.startswith("-"):
+        p = t if t.startswith("/") else os.path.join(os.environ["ROOT"], t)
+        if os.path.isfile(p):
+            n = sum(1 for _ in open(p, "rb"))
+            if n > 200: print(os.path.basename(p), n); break
+' 2>/dev/null)
+[ -n "$big" ] && block "${big% *} is ${big#* } lines; rg -n for what you need, then sed -n 'A,Bp'"
+
+# Only one full suite run per session; bin/kiro-context clears the marker at spawn
+if has "${start}bin/t *($|[;&|]|2>)"; then
+  [ -f "$root/tmp/.full_suite_ran" ] && block "full suite already ran this session; rerun only failed files (RAW=1 to force)"
+  mkdir -p "$root/tmp" && touch "$root/tmp/.full_suite_ran"
 fi
 exit 0

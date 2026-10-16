@@ -1,0 +1,16 @@
+#!/bin/bash
+# Kiro preToolUse hook for fs_write. Blocks rewriting an existing file over
+# 40 lines with "create": the whole file is regenerated as output tokens,
+# the most expensive kind. Exit 2 blocks the write and shows the reason.
+reason=$(python3 -c '
+import json, os, sys
+d = json.load(sys.stdin)
+a = d.get("tool_input") or d.get("input") or d.get("args") or d
+path = a.get("path") or ""
+if a.get("command") == "create" and os.path.isfile(path):
+    n = sum(1 for _ in open(path, "rb"))
+    if n > 40:
+        print("%s exists (%d lines); edit it with str_replace instead of rewriting" % (os.path.basename(path), n))
+' 2>/dev/null)
+[ -n "$reason" ] && { echo "blocked by bin/kiro-guard-write: $reason" >&2; exit 2; }
+exit 0
