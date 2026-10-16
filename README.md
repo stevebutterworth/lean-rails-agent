@@ -1,22 +1,45 @@
 # lean-rails-agent
 
-A lean [Kiro](https://kiro.dev) agent for Rails projects, built for tight token budgets. Hooks stop
-the agent wasting context on discovery, large reads, verbose command output and whole-file
-rewrites. Kiro hooks can block a command but not rewrite it, so every block names the compact
-alternative.
+A global [Kiro](https://kiro.dev) agent for Rails and git work on a tight token budget. Install it
+once and use it in any Rails repo: nothing is copied into the project.
+
+Hooks stop the agent wasting context on discovery, large reads, verbose command output and
+whole-file rewrites. Kiro hooks can block a command but not rewrite it, so every block names the
+compact alternative.
+
+## Install
+
+```bash
+git clone https://github.com/stevebutterworth/lean-rails-agent ~/dev/lean-rails-agent
+~/dev/lean-rails-agent/bin/install
+```
+
+This links the repo to `~/.kiro/lean-rails` and writes `~/.kiro/agents/rails.json`. Then, in any
+Rails repo:
+
+```bash
+kiro-cli chat --agent rails            # or once: kiro-cli agent set-default rails
+```
+
+Needs `rg`, `python3` and `kiro-cli`. Rerun `bin/install` after pulling changes to `agent.json`;
+everything else is live through the link.
 
 ## What it does
 
 - **Three tools only** (`fs_read`, `fs_write`, `execute_bash`), no MCP: every tool schema is sent
   on every request, so unused ones cost tokens each turn
-- **Spawn hook** (`bin/kiro-context`): prints branch, Ruby version, recent commits, pending
-  migrations and open ports so the agent skips discovery turns
-- **Bash guard** (`bin/kiro-guard`): blocks dangerous commands (destructive git, db:drop, rm -rf,
-  git push) and verbose ones, pointing at the compact form:
+- **`rules.md`**, sent every turn: terse-output rules, the compact commands, and the coding style
+  (vanilla Rails, 37signals, no service objects, deep modules). The project's own `AGENTS.md` is
+  loaded too if it has one. The `37signals-style` skill in `~/.kiro/skills` is attached as a
+  skill, so its full text loads only when needed
+- **`hooks/context`** (spawn): prints branch, Ruby version, test framework, recent commits,
+  pending migrations and open ports so the agent skips discovery turns
+- **`hooks/guard-bash`**: blocks dangerous commands (destructive git, db:drop, rm -rf, git push)
+  and verbose ones, pointing at the compact form:
 
   | Blocked | Use instead |
   |---|---|
-  | `rspec` in any form | `bin/t [files]` (full suite once per session) |
+  | `rspec`, `rails test` | `bin/test [files]` (full suite once per session) |
   | `rubocop` | `bin/lint [-a] [files]` |
   | `rails routes` | `rails routes -g pattern` |
   | `git log` without a limit | `git log --oneline -n 10` |
@@ -27,65 +50,37 @@ alternative.
   | `bundle install` | `bundle install --quiet` |
 
   Prefix `RAW=1` to bypass the token rules (not the safety rules).
-- **Read guard** (`bin/kiro-guard-read`): blocks whole-file reads over 200 lines without a line
-  range, and directory listings deeper than 1
-- **Write guard** (`bin/kiro-guard-write`): blocks rewriting an existing file over 40 lines with
-  `create`; the agent must use `str_replace`. Output tokens cost the most, and a rewrite
-  regenerates the whole file
-- **`bin/t`**: rspec with failure details, summary and rerun list only (no dots, no pending
-  section), capped at 80 lines. Overrides any `--format documentation` in `.rspec`
+- **`hooks/guard-read`**: blocks whole-file reads over 200 lines without a line range, and
+  directory listings deeper than 1
+- **`hooks/guard-write`**: blocks rewriting an existing file over 40 lines with `create`; the
+  agent must use `str_replace`. Output tokens cost the most, and a rewrite regenerates the file
+
+The agent calls these by their full path, `~/.kiro/lean-rails/bin/...`:
+
+- **`bin/test`**: runs rspec if the app has it, otherwise `rails test`. Prints failure details,
+  the summary and the rerun list only (no dots, no pending section), capped at 80 lines
 - **`bin/lint`**: rubocop in emacs format (one line per offense) on files changed against the
   default branch plus uncommitted ones
-- **`.ignore`**: keeps `coverage/`, `log/`, `tmp/`, `vendor/`, assets and `node_modules/` out of
-  `rg` results
-- **`AGENTS.md`**: terse-output rules and the compact commands, kept short because it is sent on
-  every turn
 
 ## Files
 
 ```
-your-rails-repo/
-  .ignore                 ← paths rg skips
-  .kiro/
-    agents/rails.json     ← agent wiring (tools, hooks, resources)
-    settings/cli.json     ← sets this as the default agent
-  AGENTS.md               ← your project rules (sent every turn)
-  bin/
-    kiro-context          ← agentSpawn hook
-    kiro-guard            ← preToolUse hook for bash
-    kiro-guard-read       ← preToolUse hook for file reads
-    kiro-guard-write      ← preToolUse hook for file writes
-    t                     ← compact rspec
-    lint                  ← compact rubocop
+agent.json        agent config template (~ expanded by bin/install)
+rules.md          always-on rules and coding style
+bin/install       installs the agent globally
+bin/test          compact test runner
+bin/lint          compact rubocop
+hooks/context     agentSpawn hook
+hooks/guard-bash  preToolUse hook for execute_bash
+hooks/guard-read  preToolUse hook for fs_read
+hooks/guard-write preToolUse hook for fs_write
 ```
-
-## Setup
-
-From your Rails repo root:
-
-```bash
-src=/path/to/lean-rails-agent
-mkdir -p .kiro/agents .kiro/settings
-cp $src/.kiro/agents/rails.json .kiro/agents/
-cp $src/.kiro/settings/cli.json .kiro/settings/
-cp $src/.ignore .
-cp $src/bin/{kiro-context,kiro-guard,kiro-guard-read,kiro-guard-write,t,lint} bin/
-chmod +x bin/{kiro-context,kiro-guard,kiro-guard-read,kiro-guard-write,t,lint}
-```
-
-Then edit `AGENTS.md` for your project. Needs `rg` and `python3` on the path.
 
 ## Habits that save more than any config
 
 - One session per task; `/compact` long ones instead of carrying stale context.
 - Keep `model: auto`: its credit multiplier is lower than pinning a model (check Kiro's current rates).
-- Keep `AGENTS.md` to what the agent needs on most turns.
-
-## Customising
-
-- **`bin/kiro-context`**: add or remove spawn facts (e.g. a Redis/Sidekiq check)
-- **`bin/t`**: swap `bundle exec rspec` for your runner; the guard's rspec rule needs the same change
-- **`bin/kiro-guard`**: thresholds and patterns are one line each
+- Keep `rules.md` and project `AGENTS.md` files to what the agent needs on most turns.
 
 ## Based on
 

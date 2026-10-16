@@ -1,0 +1,31 @@
+#!/bin/bash
+# Compact test run for the agent: bin/test [spec/x_spec.rb:12 | test/x_test.rb:12 ...]
+# Uses rspec when the app has it, otherwise rails test. Keeps failure details,
+# the summary and the rerun list; drops dot lines, the Pending section and
+# blank lines, and caps output at 80 lines.
+# Not rspec --format failures: it prints example names without the error and
+# silently swallows load errors (rspec-core 3.13).
+if [ -d spec ] && grep -q '^    rspec-core ' Gemfile.lock 2>/dev/null; then
+  out=$(bundle exec rspec --format progress "$@" 2>&1)
+else
+  out=$(bin/rails test "$@" 2>&1)
+fi
+status=$?
+out=$(printf '%s\n' "$out" | awk '
+  /^[.*FES]+$/ { next }
+  /^Pending:/ { skip = 1; next }
+  /^Failures:/ || /^Finished in/ { skip = 0 }
+  skip { next }
+  /^ *$/ || /^Finished in/ || /^Failed examples:/ || /\(compared using/ { next }
+  /^Run options:/ || /^# Running:/ { next }
+  { print }
+')
+lines=$(printf '%s\n' "$out" | wc -l | tr -d ' ')
+if [ "$lines" -gt 80 ]; then
+  printf '%s\n' "$out" | head -n 60
+  echo "... $((lines - 80)) lines cut; rerun one file for full detail ..."
+  printf '%s\n' "$out" | tail -n 20
+else
+  printf '%s\n' "$out"
+fi
+exit $status

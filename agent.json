@@ -1,0 +1,24 @@
+{
+  "name": "rails",
+  "description": "Lean Rails and git agent: compact output, guarded commands, 37signals style",
+  "model": "auto",
+  "tools": ["fs_read", "fs_write", "execute_bash"],
+  "allowedTools": ["fs_read", "fs_write", "execute_bash"],
+  "resources": [
+    "file://~/.kiro/lean-rails/rules.md",
+    "file://AGENTS.md",
+    "skill://~/.kiro/skills/37signals-style/SKILL.md"
+  ],
+  "hooks": {
+    "agentSpawn": [
+      { "command": "~/.kiro/lean-rails/hooks/context", "timeout_ms": 15000 }
+    ],
+    "preToolUse": [
+      { "matcher": "execute_bash", "command": "~/.kiro/lean-rails/hooks/guard-bash", "timeout_ms": 10000 },
+      { "matcher": "fs_read", "command": "~/.kiro/lean-rails/hooks/guard-read", "timeout_ms": 10000 },
+      { "matcher": "fs_write", "command": "~/.kiro/lean-rails/hooks/guard-write", "timeout_ms": 10000 }
+    ]
+  },
+  "includeMcpJson": false,
+  "mcpServers": {}
+}

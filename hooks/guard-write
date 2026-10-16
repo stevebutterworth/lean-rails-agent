@@ -12,5 +12,5 @@ if a.get("command") == "create" and os.path.isfile(path):
     if n > 40:
         print("%s exists (%d lines); edit it with str_replace instead of rewriting" % (os.path.basename(path), n))
 ' 2>/dev/null)
-[ -n "$reason" ] && { echo "blocked by bin/kiro-guard-write: $reason" >&2; exit 2; }
+[ -n "$reason" ] && { echo "blocked by guard-write: $reason" >&2; exit 2; }
 exit 0
