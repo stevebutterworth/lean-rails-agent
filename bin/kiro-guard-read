@@ -1,0 +1,19 @@
+#!/bin/bash
+# Kiro preToolUse hook for read_file and fs_read. Blocks whole-file reads of
+# files over 200 lines when no line range is given. Forces grep-then-range
+# discipline. Exit 2 blocks the read and shows the reason to the agent.
+read -r -d '' input
+eval "$(printf '%s' "$input" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+a=d.get("tool_input") or d.get("input") or d.get("args") or d
+path=next((a[k] for k in ("path","file_path","targetFile","filePath") if isinstance(a.get(k),str)),"")
+ranged=any(k in a for k in ("start_line","end_line","startLine","endLine","offset","limit","line_range","range"))
+print("path=%r; ranged=%s" % (path, "1" if ranged else "0"))
+' 2>/dev/null)"
+[ -z "$path" ] && exit 0
+block() { echo "blocked by bin/kiro-guard-read: $1" >&2; exit 2; }
+if [ "$ranged" = "0" ] && [ -f "$path" ] && [ "$(wc -l < "$path")" -gt 200 ]; then
+  block "$(basename "$path") is $(wc -l < "$path" | tr -d ' ') lines; grep for what you need, then read a line range"
+fi
+exit 0

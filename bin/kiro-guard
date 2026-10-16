@@ -1,0 +1,45 @@
+#!/bin/bash
+# Kiro preToolUse hook for execute_bash. Reads the tool input JSON on stdin.
+# Exit 2 blocks the command and shows the reason to the agent.
+cmd=$(python3 -c 'import json,sys
+d=json.load(sys.stdin)
+for k in ("tool_input","input","args"):
+    v=d.get(k)
+    if isinstance(v,dict) and v.get("command"): print(v["command"]); break
+else:
+    print(d.get("command",""))' 2>/dev/null)
+[ -z "$cmd" ] && exit 0
+root=$(cd "$(dirname "$0")/.." && pwd)
+block() { echo "blocked by bin/kiro-guard: $1" >&2; exit 2; }
+
+# Safety
+echo "$cmd" | grep -qE '(^|[;&| ])(sudo )?(/bin/)?rm +(-[a-zA-Z]*[rf][a-zA-Z]* |.*\*)' && block "recursive or forced rm; use trash or rm on one named file"
+echo "$cmd" | grep -qE 'find .*(-delete|-exec +rm)|\| *(xargs +)?rm\b|\bshred\b'         && block "find -delete / piped rm / shred"
+echo "$cmd" | grep -qE '\bgit +push\b'                                                     && block "git push is manual"
+echo "$cmd" | grep -qE '\bgit +(reset +--hard|clean +-[a-zA-Z]*f|checkout +-- +\.|branch +-D)' && block "destructive git; ask first"
+echo "$cmd" | grep -qE 'db:(drop|reset|schema:load)'                                       && block "destructive db task; ask first"
+echo "$cmd" | grep -qE '\-\-no-verify'                                                     && block "never bypass hooks"
+
+# Token budget: block redundant cd prefix
+echo "$cmd" | grep -qE "^ *cd +($root|\.|~[^/]*/[^/]+)/? *(&&|;)" && block "shell is already in repo root; drop the cd prefix"
+
+# Token budget: block cat on large files
+if echo "$cmd" | grep -qE '(^|[;&| ])cat +[^|<>;&]+$'; then
+  f=$(echo "$cmd" | sed -E 's/.*(^|[;&| ])cat +//' | awk '{print $1}')
+  [ "${f:0:1}" != "/" ] && f="$root/$f"
+  if [ -f "$f" ] && [ "$(wc -l < "$f")" -gt 200 ]; then
+    block "$(basename "$f") is $(wc -l < "$f" | tr -d ' ') lines; grep for what you need, then read a range with sed -n 'A,Bp'"
+  fi
+fi
+
+# Token budget: only one full suite run per session
+# Adjust the pattern below if you use minitest or a custom runner
+if echo "$cmd" | grep -qE 'bundle exec rspec *$|bundle exec rspec *(2>|\||;|&)'; then
+  if echo "$cmd" | grep -q 'FORCE=1'; then :
+  elif [ -f "$root/tmp/.full_suite_ran" ]; then
+    block "full suite already ran this session; rerun only failed files. Prefix FORCE=1 if a second run is truly needed"
+  else
+    touch "$root/tmp/.full_suite_ran"
+  fi
+fi
+exit 0

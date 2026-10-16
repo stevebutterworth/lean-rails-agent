@@ -1,0 +1,6 @@
+{
+  "chat.defaultAgent": "rails",
+  "toolSearch.enabled": true,
+  "toolSearch.minPct": 5,
+  "toolSearch.minTokens": 50000
+}
